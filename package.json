@@ -1,12 +1,13 @@
 {
-  "name": "paypaln8n",
+  "name": "paypal-webhook-verifier",
   "version": "1.0.0",
-  "description": "PayPal Webhook verification service for n8n integration",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "express": "^4.18.2"
+    "axios": "^1.6.7",
+    "express": "^4.18.4",
+    "dotenv": "^16.4.5"
   }
 }
