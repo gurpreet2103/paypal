@@ -1,57 +1,57 @@
 const express = require('express');
 const crypto = require('crypto');
+const axios = require('axios');
 const https = require('https');
 
+require('dotenv').config();
+
 const app = express();
-app.use(express.json({ type: '*/*' })); // Ensure raw body is parsed
+app.use(express.json());
+
+const PORT = process.env.PORT || 10000;
 
 app.post('/webhook', async (req, res) => {
-  const transmissionId = req.header('paypal-transmission-id');
-  const timeStamp = req.header('paypal-transmission-time');
-  const webhookId = process.env.PAYPAL_WEBHOOK_ID;
-  const certUrl = req.header('paypal-cert-url');
-  const actualSig = req.header('paypal-transmission-sig');
-  const authAlgo = req.header('paypal-auth-algo');
-  const body = JSON.stringify(req.body);
+  try {
+    const transmissionId = req.header('paypal-transmission-id');
+    const transmissionTime = req.header('paypal-transmission-time');
+    const certUrl = req.header('paypal-cert-url');
+    const authAlgo = req.header('paypal-auth-algo');
+    const transmissionSig = req.header('paypal-transmission-sig');
+    const webhookId = process.env.PAYPAL_WEBHOOK_ID;
+    const body = req.body;
 
-  const expectedSignature = await verifySignature({
-    transmissionId,
-    timeStamp,
-    webhookId,
-    body,
-    certUrl,
-    authAlgo,
-    actualSig,
-  });
+    // Construct expected message
+    const expectedSigPayload = `${transmissionId}|${transmissionTime}|${webhookId}|${JSON.stringify(body)}`;
 
-  if (expectedSignature) {
-    console.log('✅ Verified');
-    res.sendStatus(200);
-  } else {
-    console.log('❌ Verification failed');
-    res.sendStatus(400);
+    // Force IPv4 to avoid ECONNREFUSED
+    const httpsAgent = new https.Agent({ family: 4 });
+
+    // Download certificate
+    const certResponse = await axios.get(certUrl, { httpsAgent });
+    const cert = certResponse.data;
+
+    // Verify signature
+    const verifier = crypto.createVerify('RSA-SHA256');
+    verifier.update(expectedSigPayload, 'utf8');
+    const isValid = verifier.verify(cert, transmissionSig, 'base64');
+
+    if (isValid) {
+      console.log('Webhook verified successfully.');
+      return res.status(200).send('Webhook verified');
+    } else {
+      console.error('Invalid signature.');
+      return res.status(400).send('Invalid signature');
+    }
+  } catch (error) {
+    console.error('Verification failed:', error.message);
+    return res.status(500).send('Internal Server Error');
   }
 });
 
-const verifySignature = ({ transmissionId, timeStamp, webhookId, body, certUrl, authAlgo, actualSig }) => {
-  return new Promise((resolve, reject) => {
-    https.get(certUrl, (res) => {
-      let cert = '';
-      res.on('data', (chunk) => cert += chunk);
-      res.on('end', () => {
-        const expectedSigString = `${transmissionId}|${timeStamp}|${webhookId}|${crypto.createHash('sha256').update(body, 'utf8').digest('hex')}`;
-        const verifier = crypto.createVerify(authAlgo);
-        verifier.update(expectedSigString);
-        verifier.end();
+app.get('/', (req, res) => {
+  res.send('PayPal webhook verification service is live');
+});
 
-        const isValid = verifier.verify(cert, actualSig, 'base64');
-        resolve(isValid);
-      });
-    }).on('error', reject);
-  });
-};
-
-const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 Server is running on port ${PORT}`);
 });
