@@ -1,3 +1,4 @@
+const getRawBody = require('raw-body');
 const express = require('express');
 const crypto = require('crypto');
 const axios = require('axios');
@@ -5,7 +6,23 @@ const https = require('https');
 require('dotenv').config();
 
 const app = express();
+
+// Middleware to get raw body as string
+app.use((req, res, next) => {
+  getRawBody(req, {
+    length: req.headers['content-length'],
+    limit: '1mb',
+    encoding: true,
+  }, (err, string) => {
+    if (err) return next(err);
+    req.rawBody = string;
+    next();
+  });
+});
+
+// Now parse json normally (after rawBody middleware)
 app.use(express.json());
+
 const PORT = process.env.PORT || 10000;
 
 app.post('/webhook', async (req, res) => {
@@ -16,7 +33,6 @@ app.post('/webhook', async (req, res) => {
     const authAlgo = req.header('paypal-auth-algo');
     const transmissionSig = req.header('paypal-transmission-sig');
     const webhookId = process.env.PAYPAL_WEBHOOK_ID;
-    const body = req.body;
 
     if (!webhookId) {
       console.error('❌ PAYPAL_WEBHOOK_ID is not set');
@@ -28,7 +44,9 @@ app.post('/webhook', async (req, res) => {
       return res.status(400).send('Missing paypal-cert-url header');
     }
 
-    const expectedSigPayload = `${transmissionId}|${transmissionTime}|${webhookId}|${JSON.stringify(body)}`;
+    // Use rawBody here, NOT JSON.stringify(req.body)
+    const expectedSigPayload = `${transmissionId}|${transmissionTime}|${webhookId}|${req.rawBody}`;
+
     const httpsAgent = new https.Agent({ family: 4 });
 
     let cert;
