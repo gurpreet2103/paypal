@@ -2,12 +2,10 @@ const express = require('express');
 const crypto = require('crypto');
 const axios = require('axios');
 const https = require('https');
-
 require('dotenv').config();
 
 const app = express();
 app.use(express.json());
-
 const PORT = process.env.PORT || 10000;
 
 app.post('/webhook', async (req, res) => {
@@ -20,36 +18,48 @@ app.post('/webhook', async (req, res) => {
     const webhookId = process.env.PAYPAL_WEBHOOK_ID;
     const body = req.body;
 
-    // Construct expected message
-    const expectedSigPayload = `${transmissionId}|${transmissionTime}|${webhookId}|${JSON.stringify(body)}`;
+    if (!webhookId) {
+      console.error('❌ PAYPAL_WEBHOOK_ID is not set');
+      return res.status(500).send('Webhook ID missing from server config');
+    }
 
-    // Force IPv4 to avoid ECONNREFUSED
+    if (!certUrl) {
+      console.error('❌ Missing paypal-cert-url header');
+      return res.status(400).send('Missing paypal-cert-url header');
+    }
+
+    const expectedSigPayload = `${transmissionId}|${transmissionTime}|${webhookId}|${JSON.stringify(body)}`;
     const httpsAgent = new https.Agent({ family: 4 });
 
-    // Download certificate
-    const certResponse = await axios.get(certUrl, { httpsAgent });
-    const cert = certResponse.data;
+    let cert;
+    try {
+      const certResponse = await axios.get(certUrl, { httpsAgent });
+      cert = certResponse.data;
+    } catch (err) {
+      console.error('❌ Failed to download certificate:', err.message);
+      return res.status(500).send('Failed to fetch certificate');
+    }
 
-    // Verify signature
     const verifier = crypto.createVerify('RSA-SHA256');
     verifier.update(expectedSigPayload, 'utf8');
     const isValid = verifier.verify(cert, transmissionSig, 'base64');
 
     if (isValid) {
-      console.log('Webhook verified successfully.');
+      console.log('✅ Webhook verified successfully.');
       return res.status(200).send('Webhook verified');
     } else {
-      console.error('Invalid signature.');
+      console.error('❌ Invalid signature.');
       return res.status(400).send('Invalid signature');
     }
-  } catch (error) {
-    console.error('Verification failed:', error.message);
+
+  } catch (err) {
+    console.error('🔥 Unexpected error:', err.message);
     return res.status(500).send('Internal Server Error');
   }
 });
 
 app.get('/', (req, res) => {
-  res.send('PayPal webhook verification service is live');
+  res.send('PayPal webhook verification server is live.');
 });
 
 app.listen(PORT, () => {
