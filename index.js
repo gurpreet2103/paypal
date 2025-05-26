@@ -4,14 +4,14 @@ const https = require('https');
 const { URL } = require('url');
 
 const app = express();
-const port = 3000;
+const port = process.env.PORT || 3000;
 
-// Only parse raw body for /webhook
+// Only raw body for webhook
 app.post('/webhook', express.raw({ type: '*/*' }), async (req, res) => {
   try {
     const headers = req.headers;
     const rawBody = req.body; // Buffer
-    const bodyString = rawBody.toString(); // Must be exact string sent by PayPal
+    const bodyString = rawBody.toString(); // Must be unaltered
 
     const transmissionId = headers['paypal-transmission-id'];
     const transmissionTime = headers['paypal-transmission-time'];
@@ -19,17 +19,33 @@ app.post('/webhook', express.raw({ type: '*/*' }), async (req, res) => {
     const transmissionSig = headers['paypal-transmission-sig'];
     const authAlgo = headers['paypal-auth-algo'];
 
+    // Log incoming request for debugging
+    console.log('\n🔔 Webhook received');
+    console.log('Headers:', headers);
+    console.log('Raw body:', bodyString);
+
     if (!transmissionId || !transmissionTime || !certUrl || !transmissionSig || !authAlgo) {
+      console.error('❌ Missing PayPal verification headers');
       return res.status(400).send('Missing PayPal headers');
     }
 
-    // Reconstruct expected signed string
     const expectedString = `${transmissionId}|${transmissionTime}|${bodyString}`;
 
-    // Download the certificate
-    const certPem = await downloadCertificate(certUrl);
+    console.log('\n🔍 Verification details:');
+    console.log('expectedString:', expectedString);
+    console.log('certUrl:', certUrl);
+    console.log('authAlgo:', authAlgo);
+    console.log('signature:', transmissionSig);
 
-    // Verify the signature
+    let certPem;
+    try {
+      certPem = await downloadCertificate(certUrl);
+      console.log('✅ Certificate downloaded');
+    } catch (err) {
+      console.error('❌ Failed to download certificate:', err.message);
+      return res.status(400).send('Certificate download failed');
+    }
+
     const isValid = verifySignature(authAlgo, expectedString, transmissionSig, certPem);
 
     if (!isValid) {
@@ -37,37 +53,53 @@ app.post('/webhook', express.raw({ type: '*/*' }), async (req, res) => {
       return res.status(400).send('Invalid signature');
     }
 
-    console.log('✅ Verified webhook');
-    const parsed = JSON.parse(bodyString);
-    console.dir(parsed, { depth: null });
-    res.status(200).send('Verified');
+    console.log('✅ Webhook verified!');
+    const parsedBody = JSON.parse(bodyString);
+    console.dir(parsedBody, { depth: null });
+
+    return res.status(200).send('Verified');
   } catch (err) {
-    console.error('❌ Webhook error:', err);
-    res.status(500).send('Internal error');
+    console.error('❌ Error in webhook handler:', err);
+    return res.status(500).send('Internal Server Error');
   }
 });
 
-// Download certificate
+// Download cert
 function downloadCertificate(certUrl) {
   return new Promise((resolve, reject) => {
-    https.get(new URL(certUrl), res => {
+    https.get(new URL(certUrl), (res) => {
       let data = '';
-      res.on('data', chunk => data += chunk);
-      res.on('end', () => resolve(data));
+      res.on('data', (chunk) => data += chunk);
+      res.on('end', () => {
+        if (res.statusCode !== 200) {
+          return reject(new Error(`Bad status: ${res.statusCode}`));
+        }
+        resolve(data);
+      });
     }).on('error', reject);
   });
 }
 
-// Verify signature
+// Verify PayPal signature
 function verifySignature(algo, data, signature, cert) {
-  const verifier = crypto.createVerify(algo === 'SHA256withRSA' ? 'RSA-SHA256' : algo);
-  verifier.update(data, 'utf8');
-  return verifier.verify(cert, signature, 'base64');
+  const nodeAlgo = algo === 'SHA256withRSA' ? 'RSA-SHA256' : algo;
+  try {
+    const verifier = crypto.createVerify(nodeAlgo);
+    verifier.update(data, 'utf8');
+    const result = verifier.verify(cert, signature, 'base64');
+    console.log('🔐 Signature valid:', result);
+    return result;
+  } catch (err) {
+    console.error('❌ Verification error:', err.message);
+    return false;
+  }
 }
 
-// Fallback
+// Fallback route
 app.use((req, res) => {
   res.status(404).send(`Cannot ${req.method} ${req.originalUrl}`);
 });
 
-app.listen(port, () => console.log(`🚀 Listening at http://localhost:${port}`));
+app.listen(port, () => {
+  console.log(`🚀 Server listening at http://localhost:${port}`);
+});
