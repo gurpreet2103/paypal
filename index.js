@@ -6,12 +6,16 @@ const { URL } = require('url');
 const app = express();
 const port = process.env.PORT || 3000;
 
-// Only raw body for webhook
+// === IMPORTANT: Put your PayPal webhook ID here ===
+// You get this from your PayPal developer dashboard when you create your webhook
+const PAYPAL_WEBHOOK_ID = process.env.PAYPAL_WEBHOOK_ID || 'WH-54M31324A08453805-0TT498265C515724R';
+
+// Only raw body for webhook so signature check works correctly
 app.post('/webhook', express.raw({ type: '*/*' }), async (req, res) => {
   try {
     const headers = req.headers;
     const rawBody = req.body; // Buffer
-    const bodyString = rawBody.toString(); // Must be unaltered
+    const bodyString = rawBody.toString('utf8'); // Must be unaltered exact string
 
     const transmissionId = headers['paypal-transmission-id'];
     const transmissionTime = headers['paypal-transmission-time'];
@@ -19,7 +23,6 @@ app.post('/webhook', express.raw({ type: '*/*' }), async (req, res) => {
     const transmissionSig = headers['paypal-transmission-sig'];
     const authAlgo = headers['paypal-auth-algo'];
 
-    // Log incoming request for debugging
     console.log('\n🔔 Webhook received');
     console.log('Headers:', headers);
     console.log('Raw body:', bodyString);
@@ -29,7 +32,13 @@ app.post('/webhook', express.raw({ type: '*/*' }), async (req, res) => {
       return res.status(400).send('Missing PayPal headers');
     }
 
-    const expectedString = `${transmissionId}|${transmissionTime}|${bodyString}`;
+    if (!PAYPAL_WEBHOOK_ID || PAYPAL_WEBHOOK_ID === 'YOUR_PAYPAL_WEBHOOK_ID_HERE') {
+      console.error('❌ PayPal webhook ID not set! Please set PAYPAL_WEBHOOK_ID');
+      return res.status(500).send('Webhook ID not configured');
+    }
+
+    // Construct the expected signed string including webhook ID (critical)
+    const expectedString = `${transmissionId}|${transmissionTime}|${PAYPAL_WEBHOOK_ID}|${bodyString}`;
 
     console.log('\n🔍 Verification details:');
     console.log('expectedString:', expectedString);
