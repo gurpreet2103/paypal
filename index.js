@@ -8,18 +8,42 @@ const port = process.env.PORT || 3000;
 // Your PayPal webhook ID from dashboard
 const PAYPAL_WEBHOOK_ID = process.env.PAYPAL_WEBHOOK_ID || 'WH-54M31324A08453805-0TT498265C515724R';
 
-// Middleware for JSON parsing
-app.use(express.json());
+// Middleware for parsing different content types
+app.use(express.json({ limit: '10mb' }));
+app.use(express.text({ type: 'text/plain', limit: '10mb' }));
+app.use(express.raw({ type: 'application/octet-stream', limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Modified endpoint to handle n8n HTTP requests
+// Modified endpoint to handle n8n HTTP requests with flexible content types
 app.post('/webhook', async (req, res) => {
   try {
     const headers = req.headers;
-    const body = req.body;
+    const contentType = headers['content-type'] || 'unknown';
     
     console.log('\n🔔 Received PayPal Webhook from n8n:');
+    console.log('Content-Type:', contentType);
     console.log('Headers:', headers);
-    console.log('Body:', body);
+    
+    // Handle different body formats based on content type
+    let body;
+    if (contentType.includes('application/json')) {
+      body = req.body;
+    } else if (contentType.includes('text/plain')) {
+      try {
+        body = JSON.parse(req.body);
+      } catch (e) {
+        body = req.body;
+      }
+    } else {
+      // Try to parse as JSON, fallback to raw
+      try {
+        body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+      } catch (e) {
+        body = req.body;
+      }
+    }
+    
+    console.log('Parsed Body:', body);
 
     // Extract PayPal verification headers
     const transmissionId = headers['paypal-transmission-id'];
