@@ -78,9 +78,23 @@ app.post('/webhook', async (req, res) => {
     if (body.data) {
       // If n8n sends {webhook_id: "...", data: {...}}
       payloadString = typeof body.data === 'string' ? body.data : JSON.stringify(body.data);
+    } else if (typeof body === 'object' && body !== null) {
+      // If n8n sends the webhook payload as an object, stringify it
+      payloadString = JSON.stringify(body);
     } else {
-      // If n8n sends the webhook payload directly
-      payloadString = typeof body === 'string' ? body : JSON.stringify(body);
+      // If it's already a string
+      payloadString = body.toString();
+    }
+    
+    // If payloadString looks like just a number, it means we got the wrong data
+    if (/^\d+$/.test(payloadString.trim())) {
+      console.error('❌ Payload appears to be just a number, not the full webhook JSON');
+      console.error('❌ This suggests the webhook body is not being sent correctly from n8n');
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Invalid payload - expected full webhook JSON, got: ' + payloadString,
+        hint: 'Check your n8n HTTP node body configuration'
+      });
     }
 
     console.log('📝 Using webhook ID:', webhookId);
