@@ -41,7 +41,9 @@ app.post('/webhook', async (req, res) => {
       body = bodyString;
     }
     
-    console.log('Final parsed body:', body);
+    console.log('Final parsed body:', JSON.stringify(body, null, 2));
+    console.log('Body type:', typeof body);
+    console.log('Body keys:', typeof body === 'object' ? Object.keys(body) : 'not an object');
 
     // Extract PayPal verification headers
     const transmissionId = headers['paypal-transmission-id'];
@@ -99,21 +101,61 @@ app.post('/webhook', async (req, res) => {
 
     console.log('📝 Using webhook ID:', webhookId);
     console.log('📝 Payload string length:', payloadString.length);
+    console.log('📝 First 200 chars of payload:', payloadString.substring(0, 200));
+    console.log('📝 Last 100 chars of payload:', payloadString.substring(payloadString.length - 100));
 
     // Construct expected signed string PayPal expects: transmissionId|transmissionTime|webhookId|payloadString
     const expectedString = `${transmissionId}|${transmissionTime}|${webhookId}|${payloadString}`;
     
-    console.log('🔐 Expected string for verification:', expectedString.substring(0, 200) + '...');
+    console.log('🔐 Expected string components:');
+    console.log('  - transmissionId:', transmissionId);
+    console.log('  - transmissionTime:', transmissionTime);
+    console.log('  - webhookId:', webhookId);
+    console.log('  - payloadLength:', payloadString.length);
+    console.log('🔐 Full expected string length:', expectedString.length);
+    console.log('🔐 Expected string (first 300 chars):', expectedString.substring(0, 300));
+    
+    // Try different payload formatting approaches
+    const alternativePayloads = [
+      payloadString,
+      payloadString.replace(/\s+/g, ''), // Remove all whitespace
+      JSON.stringify(JSON.parse(payloadString)), // Re-stringify to normalize
+      JSON.stringify(JSON.parse(payloadString), null, 0) // Compact format
+    ];
+    
+    console.log('🔧 Trying multiple payload formats for verification...');
 
     try {
       // Download the PayPal public certificate
       const certPem = await downloadCertificate(certUrl);
       
-      // Verify the signature using Node crypto
-      const isValid = verifySignature(authAlgo, expectedString, transmissionSig, certPem);
+      // Try different payload formats to find the one PayPal originally signed
+      let isValid = false;
+      let workingPayload = null;
+      
+      for (let i = 0; i < alternativePayloads.length; i++) {
+        const testPayload = alternativePayloads[i];
+        const testString = `${transmissionId}|${transmissionTime}|${webhookId}|${testPayload}`;
+        
+        console.log(`🔐 Attempt ${i + 1}: Testing payload format (length: ${testPayload.length})`);
+        
+        const verified = verifySignature(authAlgo, testString, transmissionSig, certPem);
+        if (verified) {
+          isValid = true;
+          workingPayload = testPayload;
+          console.log(`✅ Signature verified with format ${i + 1}!`);
+          break;
+        }
+      }
 
       if (!isValid) {
-        console.error('❌ Invalid signature, rejecting webhook');
+        console.error('❌ Invalid signature with all payload formats, rejecting webhook');
+        console.error('🔍 Debug info:');
+        console.error('  - Cert URL:', certUrl);
+        console.error('  - Auth Algo:', authAlgo);
+        console.error('  - Transmission Sig length:', transmissionSig.length);
+        console.error('  - Webhook ID used:', webhookId);
+        
         return res.status(400).json({ 
           success: false, 
           error: 'Invalid signature',
@@ -122,7 +164,10 @@ app.post('/webhook', async (req, res) => {
             transmissionId,
             transmissionTime,
             payloadLength: payloadString.length,
-            expectedStringPrefix: expectedString.substring(0, 100)
+            certUrl,
+            authAlgo,
+            signatureLength: transmissionSig.length,
+            testedFormats: alternativePayloads.length
           }
         });
       }
