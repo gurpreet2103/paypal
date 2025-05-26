@@ -6,14 +6,22 @@ const { URL } = require('url');
 const app = express();
 const port = process.env.PORT || 3000;
 
-// Your PayPal webhook ID here
+// Your PayPal webhook ID from dashboard
 const PAYPAL_WEBHOOK_ID = process.env.PAYPAL_WEBHOOK_ID || 'WH-54M31324A08453805-0TT498265C515724R';
 
-// Only parse raw body for the webhook POST route (required for signature verification)
+// Use express.raw() to capture raw body as a Buffer (no JSON parsing here!)
 app.post('/webhook', express.raw({ type: '*/*' }), async (req, res) => {
   try {
-    // Extract PayPal verification headers, using lower case keys (Express makes them lowercase)
     const headers = req.headers;
+    const rawBodyBuffer = req.body; // Buffer containing exact bytes PayPal sent
+    const rawBodyString = rawBodyBuffer.toString('utf8'); // EXACT raw string
+
+    // Log raw payload string and headers for debugging
+    console.log('\n🔔 Received PayPal Webhook:');
+    console.log('Headers:', headers);
+    console.log('Raw body:', rawBodyString);
+
+    // Extract PayPal verification headers
     const transmissionId = headers['paypal-transmission-id'];
     const transmissionTime = headers['paypal-transmission-time'];
     const certUrl = headers['paypal-cert-url'];
@@ -21,104 +29,71 @@ app.post('/webhook', express.raw({ type: '*/*' }), async (req, res) => {
     const authAlgo = headers['paypal-auth-algo'];
 
     if (!transmissionId || !transmissionTime || !certUrl || !transmissionSig || !authAlgo) {
-      console.error('❌ Missing PayPal verification headers:', {
-        transmissionId, transmissionTime, certUrl, transmissionSig, authAlgo
-      });
+      console.error('❌ Missing PayPal verification headers');
       return res.status(400).send('Missing PayPal headers');
     }
 
     if (!PAYPAL_WEBHOOK_ID || PAYPAL_WEBHOOK_ID === 'YOUR_PAYPAL_WEBHOOK_ID_HERE') {
-      console.error('❌ PayPal webhook ID not set! Please set PAYPAL_WEBHOOK_ID environment variable');
+      console.error('❌ PayPal webhook ID not set! Please set PAYPAL_WEBHOOK_ID');
       return res.status(500).send('Webhook ID not configured');
     }
 
-    // Raw body buffer -> convert to exact string PayPal signed
-    const rawBodyBuffer = req.body;
-    const bodyString = rawBodyBuffer.toString('utf8');
+    // Construct expected signed string PayPal expects: transmissionId|transmissionTime|webhookId|rawBodyString
+    const expectedString = `${transmissionId}|${transmissionTime}|${PAYPAL_WEBHOOK_ID}|${rawBodyString}`;
 
-    console.log('\n🔔 Webhook received');
-    console.log('Headers:', {
-      transmissionId,
-      transmissionTime,
-      certUrl,
-      transmissionSig,
-      authAlgo,
-    });
-    console.log('Raw body:', bodyString);
+    // Download the PayPal public certificate
+    const certPem = await downloadCertificate(certUrl);
 
-    // Build expected signed string exactly as PayPal expects
-    const expectedString = `${transmissionId}|${transmissionTime}|${PAYPAL_WEBHOOK_ID}|${bodyString}`;
-
-    console.log('\n🔍 Verification details:');
-    console.log('expectedString:', expectedString);
-    console.log('certUrl:', certUrl);
-    console.log('authAlgo:', authAlgo);
-    console.log('signature:', transmissionSig);
-
-    let certPem;
-    try {
-      certPem = await downloadCertificate(certUrl);
-      console.log('✅ Certificate downloaded');
-    } catch (err) {
-      console.error('❌ Failed to download certificate:', err.message);
-      return res.status(400).send('Certificate download failed');
-    }
-
+    // Verify the signature using Node crypto
     const isValid = verifySignature(authAlgo, expectedString, transmissionSig, certPem);
 
     if (!isValid) {
-      console.error('❌ Invalid signature - rejecting event');
+      console.error('❌ Invalid signature, rejecting webhook');
       return res.status(400).send('Invalid signature');
     }
 
-    console.log('✅ Webhook verified!');
+    console.log('✅ Webhook signature verified successfully!');
 
-    // Parse JSON after verification
-    const parsedBody = JSON.parse(bodyString);
-    console.dir(parsedBody, { depth: null });
+    // If you want to parse JSON for further processing after verifying signature:
+    const jsonBody = JSON.parse(rawBodyString);
+    console.dir(jsonBody, { depth: null });
 
-    return res.status(200).send('Verified');
+    return res.status(200).send('Webhook verified');
   } catch (err) {
-    console.error('❌ Error in webhook handler:', err);
+    console.error('❌ Error processing webhook:', err);
     return res.status(500).send('Internal Server Error');
   }
 });
 
+// Download certificate helper
 function downloadCertificate(certUrl) {
   return new Promise((resolve, reject) => {
     https.get(new URL(certUrl), (res) => {
+      if (res.statusCode !== 200) {
+        return reject(new Error(`Failed to download cert, status code: ${res.statusCode}`));
+      }
       let data = '';
-      res.on('data', (chunk) => data += chunk);
-      res.on('end', () => {
-        if (res.statusCode !== 200) {
-          reject(new Error(`Bad status: ${res.statusCode}`));
-        } else {
-          resolve(data);
-        }
-      });
-    }).on('error', (err) => reject(err));
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => resolve(data));
+    }).on('error', reject);
   });
 }
 
-function verifySignature(algo, data, signature, cert) {
-  const nodeAlgo = algo === 'SHA256withRSA' ? 'RSA-SHA256' : algo;
+// Verify signature helper
+function verifySignature(authAlgo, data, signature, cert) {
+  const nodeAlgo = authAlgo === 'SHA256withRSA' ? 'RSA-SHA256' : authAlgo;
   try {
     const verifier = crypto.createVerify(nodeAlgo);
     verifier.update(data, 'utf8');
-    const result = verifier.verify(cert, signature, 'base64');
-    console.log('🔐 Signature valid:', result);
-    return result;
-  } catch (err) {
-    console.error('❌ Verification error:', err.message);
+    const verified = verifier.verify(cert, signature, 'base64');
+    console.log('🔐 Signature valid:', verified);
+    return verified;
+  } catch (error) {
+    console.error('❌ Signature verification error:', error);
     return false;
   }
 }
 
-// Catch-all fallback route for undefined endpoints
-app.use((req, res) => {
-  res.status(404).send(`Cannot ${req.method} ${req.originalUrl}`);
-});
-
 app.listen(port, () => {
-  console.log(`🚀 Server listening at http://localhost:${port}`);
+  console.log(`🚀 Webhook server listening on http://localhost:${port}`);
 });
