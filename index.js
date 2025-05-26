@@ -8,42 +8,40 @@ const port = process.env.PORT || 3000;
 // Your PayPal webhook ID from dashboard
 const PAYPAL_WEBHOOK_ID = process.env.PAYPAL_WEBHOOK_ID || 'WH-54M31324A08453805-0TT498265C515724R';
 
-// Middleware for parsing different content types
-app.use(express.json({ limit: '10mb' }));
-app.use(express.text({ type: 'text/plain', limit: '10mb' }));
-app.use(express.raw({ type: 'application/octet-stream', limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+// Middleware to accept ANY content type and capture raw body
+app.use('/webhook', express.raw({ 
+  type: '*/*',  // Accept any content type
+  limit: '10mb'
+}));
 
-// Modified endpoint to handle n8n HTTP requests with flexible content types
+// Modified endpoint to handle n8n HTTP requests - accepts ANY content type
 app.post('/webhook', async (req, res) => {
   try {
     const headers = req.headers;
-    const contentType = headers['content-type'] || 'unknown';
+    const contentType = headers['content-type'] || 'not-specified';
+    const rawBody = req.body; // This will be a Buffer
     
     console.log('\n🔔 Received PayPal Webhook from n8n:');
     console.log('Content-Type:', contentType);
-    console.log('Headers:', headers);
+    console.log('Raw body type:', typeof rawBody);
+    console.log('Raw body length:', rawBody ? rawBody.length : 'undefined');
+    console.log('Headers:', JSON.stringify(headers, null, 2));
     
-    // Handle different body formats based on content type
+    // Convert buffer to string
+    const bodyString = rawBody ? rawBody.toString('utf8') : '';
+    console.log('Body as string:', bodyString);
+    
+    // Try to parse as JSON
     let body;
-    if (contentType.includes('application/json')) {
-      body = req.body;
-    } else if (contentType.includes('text/plain')) {
-      try {
-        body = JSON.parse(req.body);
-      } catch (e) {
-        body = req.body;
-      }
-    } else {
-      // Try to parse as JSON, fallback to raw
-      try {
-        body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
-      } catch (e) {
-        body = req.body;
-      }
+    try {
+      body = JSON.parse(bodyString);
+      console.log('✅ Successfully parsed as JSON');
+    } catch (e) {
+      console.log('❌ Could not parse as JSON, using raw string');
+      body = bodyString;
     }
     
-    console.log('Parsed Body:', body);
+    console.log('Final parsed body:', body);
 
     // Extract PayPal verification headers
     const transmissionId = headers['paypal-transmission-id'];
